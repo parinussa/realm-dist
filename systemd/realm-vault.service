@@ -1,0 +1,17 @@
+[Unit]
+Description=Agent Vault (realm, co-located)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=realm
+# master password supplied by the operator (root-only file), read via --password-stdin
+ExecStart=/usr/local/bin/agent-vault server --host 0.0.0.0 --port 14321 --mitm-port 14322 --password-stdin
+StandardInput=file:/etc/realm/vault-master
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
