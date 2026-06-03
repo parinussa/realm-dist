@@ -161,7 +161,19 @@ sudo ufw allow 3001
 sudo ufw deny 5432    # Postgres
 sudo ufw deny 14321   # Agent Vault HTTP API
 sudo ufw deny 14322   # Agent Vault proxy port
+
+# REQUIRED: let workspace containers reach the vault over the docker bridge.
+# Containers connect via host.docker.internal -> the host's docker-bridge IP, which
+# hits the host INPUT chain; with a default-deny policy that traffic is dropped and
+# `claude -p` fails with "context deadline exceeded". install.sh adds these when ufw
+# is active; add them by hand if you enable ufw later:
+sudo ufw allow from 172.16.0.0/12 to any port 14321 proto tcp
+sudo ufw allow from 172.16.0.0/12 to any port 14322 proto tcp
 ```
+
+> Native Linux Docker has no built-in `host.docker.internal`; the realm dev-container
+> template maps it via `runArgs: --add-host=host.docker.internal:host-gateway`, so the
+> alias resolves on both Linux and Docker Desktop/OrbStack.
 
 Apply and enable ufw if not already active:
 

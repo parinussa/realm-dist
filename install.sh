@@ -51,9 +51,16 @@ id realm >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/
 usermod -aG docker realm
 install -d -m 755 /opt/realm
 install -d -m 700 /etc/realm
-# agent-vault stores its DB under $HOME/.agent-vault; the realm service user has no
-# home, so give it a writable data dir (the vault unit sets HOME to this).
+# agent-vault stores its DB under $HOME/.agent-vault and devpod writes config + ssh
+# under $HOME; the realm service user has no home, so give it a writable data dir
+# (both units set HOME to this).
 install -d -o realm -g realm -m 700 /var/lib/realm
+install -d -o realm -g realm -m 700 /var/lib/realm/.ssh
+
+# 4b. register the devpod docker provider as the realm user (server shells out to
+# devpod up --provider docker; without this it errors "couldn't find provider docker").
+sudo -u realm env HOME=/var/lib/realm devpod provider add docker --use 2>/dev/null \
+  || log "devpod docker provider already present"
 
 # 5. Postgres (idempotent)
 if ! docker ps -a --format '{{.Names}}' | grep -qx realm-db; then
@@ -114,6 +121,16 @@ export JDBC_DATABASE_URL
 ADMIN_OUT="$(java -jar /opt/realm/realm-server.jar bootstrap-admin || true)"
 echo "$ADMIN_OUT"
 
+# 10b. firewall: when ufw is active, workspace containers reach the vault via the
+# docker bridge (host.docker.internal → host-gateway), which hits the host's INPUT
+# chain. With a default-deny INPUT policy that traffic is dropped, so allow the
+# docker private range to the vault ports. Public access to them stays denied.
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  log "allowing docker subnet -> vault ports (14321/14322)"
+  ufw allow from 172.16.0.0/12 to any port 14321 proto tcp >/dev/null 2>&1 || true
+  ufw allow from 172.16.0.0/12 to any port 14322 proto tcp >/dev/null 2>&1 || true
+fi
+
 # 11. operator checklist
 cat <<'EOF'
 
@@ -131,6 +148,8 @@ NEXT — Agent Vault (operator, manual; the installer does not hold your credent
      Create a server-mode provider (vault_addr=http://host.docker.internal:14321,
      vault_name=default, that token), then assign developers.
 
-FIREWALL (recommended): allow 3001; DENY 5432, 14321, 14322 from public.
+FIREWALL: allow 3001; DENY 5432, 14321, 14322 from public. (If ufw is active this
+script already allowed the docker subnet 172.16.0.0/12 -> 14321/14322 so workspace
+containers can reach the vault; keep those rules.)
 =================================================
 EOF
