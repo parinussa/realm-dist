@@ -51,6 +51,9 @@ id realm >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/
 usermod -aG docker realm
 install -d -m 755 /opt/realm
 install -d -m 700 /etc/realm
+# agent-vault stores its DB under $HOME/.agent-vault; the realm service user has no
+# home, so give it a writable data dir (the vault unit sets HOME to this).
+install -d -o realm -g realm -m 700 /var/lib/realm
 
 # 5. Postgres (idempotent)
 if ! docker ps -a --format '{{.Names}}' | grep -qx realm-db; then

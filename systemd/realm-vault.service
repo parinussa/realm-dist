@@ -6,6 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=realm
+# agent-vault stores its DB at $HOME/.agent-vault; the realm user has no home, so
+# point HOME at its data dir (created 700 realm:realm by install.sh).
+Environment=HOME=/var/lib/realm
 # master password supplied by the operator (root-only file), read via --password-stdin
 ExecStart=/usr/local/bin/agent-vault server --host 0.0.0.0 --port 14321 --mitm-port 14322 --password-stdin
 StandardInput=file:/etc/realm/vault-master
