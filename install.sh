@@ -11,7 +11,9 @@ AGENT_VAULT_VERSION="0.21.1"
 
 log() { printf '\033[1;36m[realm]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[realm] %s\033[0m\n' "$*" >&2; exit 1; }
-genpw() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24; }
+# Bounded read then substring — NOT `tr ... | head -c N`, which SIGPIPEs tr and,
+# under `set -o pipefail`, aborts the script (exit 141).
+genpw() { local raw; raw="$(head -c 256 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')"; printf '%s' "${raw:0:24}"; }
 
 # 1. preflight
 [ "$(id -u)" = "0" ] || die "run as root (use sudo)"
