@@ -121,7 +121,41 @@ export JDBC_DATABASE_URL
 ADMIN_OUT="$(java -jar /opt/realm/realm-server.jar bootstrap-admin || true)"
 echo "$ADMIN_OUT"
 
-# 10b. firewall: when ufw is active, workspace containers reach the vault via the
+# 10b. TLS (opt-in): when REALM_DOMAIN is set, front the control plane with Caddy
+# (auto-HTTPS via Let's Encrypt) and bind realm-server to localhost.
+if [ -n "${REALM_DOMAIN:-}" ]; then
+  CADDY_VERSION="2.8.4"
+  log "configuring TLS (Caddy) for ${REALM_DOMAIN}"
+  if ! command -v caddy >/dev/null 2>&1; then
+    curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${GOARCH}.tar.gz" -o /tmp/caddy.tgz
+    tar -xzf /tmp/caddy.tgz -C /tmp caddy
+    install -m 755 /tmp/caddy /usr/local/bin/caddy
+    rm -f /tmp/caddy.tgz /tmp/caddy
+  fi
+  id caddy >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin caddy
+  install -d -o caddy -g caddy -m 700 /var/lib/caddy
+  install -d -m 755 /etc/caddy
+  cat > /etc/caddy/Caddyfile <<EOF
+{
+    email ${REALM_TLS_EMAIL:-admin@${REALM_DOMAIN}}
+}
+${REALM_DOMAIN} {
+    reverse_proxy 127.0.0.1:3001
+}
+EOF
+  chmod 644 /etc/caddy/Caddyfile
+  if grep -q '^REALM_HOST=' /etc/realm/env; then
+    sed -i 's/^REALM_HOST=.*/REALM_HOST=127.0.0.1/' /etc/realm/env
+  else
+    printf 'REALM_HOST=127.0.0.1\n' >> /etc/realm/env
+  fi
+  systemctl restart realm-server
+  curl -fsSL "${RAW_BASE}/systemd/realm-caddy.service" -o /etc/systemd/system/realm-caddy.service
+  systemctl daemon-reload
+  systemctl enable --now realm-caddy
+fi
+
+# 10c. firewall: when ufw is active, workspace containers reach the vault via the
 # docker bridge (host.docker.internal → host-gateway), which hits the host's INPUT
 # chain. With a default-deny INPUT policy that traffic is dropped, so allow the
 # docker private range to the vault ports. Public access to them stays denied.
@@ -129,13 +163,24 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: 
   log "allowing docker subnet -> vault ports (14321/14322)"
   ufw allow from 172.16.0.0/12 to any port 14321 proto tcp >/dev/null 2>&1 || true
   ufw allow from 172.16.0.0/12 to any port 14322 proto tcp >/dev/null 2>&1 || true
+  if [ -n "${REALM_DOMAIN:-}" ]; then
+    log "TLS firewall: allow 80/443, deny 3001"
+    ufw allow 80/tcp   >/dev/null 2>&1 || true
+    ufw allow 443/tcp  >/dev/null 2>&1 || true
+    ufw deny  3001/tcp >/dev/null 2>&1 || true
+  fi
 fi
 
 # 11. operator checklist
+if [ -n "${REALM_DOMAIN:-}" ]; then
+  SERVER_URL="https://${REALM_DOMAIN}  (TLS via Caddy; ensure DNS A record -> this host and ports 80+443 are open)"
+  FIREWALL_NOTE="FIREWALL: 80+443 open; 3001 DENIED (Caddy only); DENY 5432, 14321, 14322 from public. (ufw already allowed docker subnet 172.16.0.0/12 -> 14321/14322 for the vault; keep those.)"
+else
+  SERVER_URL="http://<this-host>:3001  (plaintext; dev/internal only — set REALM_DOMAIN to enable TLS)"
+  FIREWALL_NOTE="FIREWALL: allow 3001; DENY 5432, 14321, 14322 from public. (ufw already allowed docker subnet 172.16.0.0/12 -> 14321/14322 for the vault; keep those.)"
+fi
+printf '\n================ realm installed ================\nServer:  %s\n\n' "$SERVER_URL"
 cat <<'EOF'
-
-================ realm installed ================
-Server:  http://<this-host>:3001   (systemctl status realm-server)
 Admin:   see the 'admin created' line above (store the password now)
 
 NEXT — Agent Vault (operator, manual; the installer does not hold your credentials):
@@ -148,8 +193,5 @@ NEXT — Agent Vault (operator, manual; the installer does not hold your credent
      Create a server-mode provider (vault_addr=http://host.docker.internal:14321,
      vault_name=default, that token), then assign developers.
 
-FIREWALL: allow 3001; DENY 5432, 14321, 14322 from public. (If ufw is active this
-script already allowed the docker subnet 172.16.0.0/12 -> 14321/14322 so workspace
-containers can reach the vault; keep those rules.)
-=================================================
 EOF
+printf '%s\n=================================================\n' "$FIREWALL_NOTE"

@@ -9,8 +9,8 @@ dedicated VM and preparing it for developer use.
 
 - **OS:** Ubuntu 22.04+ or Debian 12+ (x86\_64 or arm64)
 - **Access:** root or a user with full `sudo`
-- **Network:** the VM must be reachable by developers on port **3001**
-  (HTTPS reverse proxy recommended for production — see [Firewall](#5-firewall))
+- **Network:** the VM must be reachable by developers on port **3001** (plaintext)
+  or **443** (TLS — see [TLS (production)](#3-tls-production))
 
 ---
 
@@ -44,7 +44,73 @@ from the installer after the session ends.
 
 ---
 
-## 3. Seed Agent Vault (manual)
+## 3. TLS (production)
+
+For a production server, set `REALM_DOMAIN` (and optionally `REALM_TLS_EMAIL`)
+before piping to bash:
+
+```bash
+REALM_DOMAIN=realm.example.com REALM_TLS_EMAIL=you@example.com \
+  curl -fsSL https://raw.githubusercontent.com/parinussa/realm-dist/main/install.sh | sudo bash
+```
+
+`REALM_TLS_EMAIL` is optional — it defaults to `admin@<REALM_DOMAIN>` and is
+used as the Let's Encrypt account email. Omit `REALM_DOMAIN` entirely to fall
+back to plaintext `:3001` (dev/internal only).
+
+### Prerequisites
+
+- A DNS **A record** pointing `REALM_DOMAIN` at the VM's public IP, already
+  propagated before running the installer.
+- Inbound **ports 80 and 443** open in your cloud firewall / security group.
+  Port 80 is required for the Let's Encrypt HTTP-01 challenge and for
+  HTTP → HTTPS redirect — the installer will fail to obtain a cert if 80 is
+  blocked.
+
+### What the TLS block does
+
+| Action | Detail |
+|---|---|
+| Installs Caddy | Pinned 2.8.4 (binary from GitHub releases) |
+| Obtains + auto-renews cert | Let's Encrypt, HTTP-01 challenge |
+| Writes Caddyfile | `/etc/caddy/Caddyfile` — reverse-proxies `https://<REALM_DOMAIN>` → `127.0.0.1:3001` |
+| Binds realm-server to localhost | Sets `REALM_HOST=127.0.0.1` in `/etc/realm/env`; realm-server is no longer reachable directly from outside |
+| Starts systemd unit | `realm-caddy` (enabled at boot) |
+| Configures ufw (if active) | Opens 80/tcp and 443/tcp; **denies 3001/tcp** so Caddy is the only public entry point |
+
+### Log in
+
+Once TLS is active, point the CLI at the HTTPS URL — no port needed:
+
+```bash
+realm login --server https://realm.example.com
+```
+
+The CLI trusts the public Let's Encrypt certificate automatically. All
+subsequent commands (`realm up`, `realm ssh`, `realm down`) communicate over
+TLS; WebSocket traffic uses `wss://` automatically.
+
+### Certificate renewal
+
+Automatic — Caddy renews certificates before they expire. No operator action
+required. Cert and ACME account data are stored under `/var/lib/caddy`.
+
+### Operate Caddy
+
+```bash
+systemctl status realm-caddy
+journalctl -u realm-caddy -f
+```
+
+The Caddyfile is at `/etc/caddy/Caddyfile`. After editing, reload with:
+
+```bash
+systemctl reload realm-caddy
+```
+
+---
+
+## 4. Seed Agent Vault (manual)
 
 The installer does not hold your Anthropic credentials. After the installer
 finishes, complete the vault setup manually:
@@ -87,13 +153,13 @@ server-mode provider.
 
 ---
 
-## 4. Create a server-mode provider and assign a developer
+## 5. Create a server-mode provider and assign a developer
 
 The one-line install (Section 2) printed an admin **password** (not a token).
 Exchange that password for a bearer token via `POST /v1/auth/login` (shown in
-step 4a below), then use that token for all subsequent API calls.
+step 5a below), then use that token for all subsequent API calls.
 
-### 4a. Log in as admin and capture the token
+### 5a. Log in as admin and capture the token
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:3001/v1/auth/login \
@@ -102,7 +168,7 @@ TOKEN=$(curl -s -X POST http://localhost:3001/v1/auth/login \
   | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
 ```
 
-### 4b. Create a server-mode provider
+### 5b. Create a server-mode provider
 
 ```bash
 curl -s -X POST http://localhost:3001/v1/providers \
@@ -125,7 +191,7 @@ curl -s -X POST http://localhost:3001/v1/providers \
   on this VM can reach the vault sidecar running on the same host.
 - `vault_token` is the token you minted with `agent-vault vault token` above.
 
-### 4c. Create a developer user
+### 5c. Create a developer user
 
 ```bash
 curl -s -X POST http://localhost:3001/v1/users \
@@ -135,7 +201,7 @@ curl -s -X POST http://localhost:3001/v1/users \
 # → {"id":"<user-uuid>","username":"alice","role":"user"}
 ```
 
-### 4d. Assign the provider to the developer
+### 5d. Assign the provider to the developer
 
 ```bash
 curl -s -X POST http://localhost:3001/v1/providers/<provider-uuid>/assignments \
@@ -145,19 +211,46 @@ curl -s -X POST http://localhost:3001/v1/providers/<provider-uuid>/assignments \
 # → {"status":"assigned"}
 ```
 
-Hand the developer the server URL (`http://<this-host>:3001`), their username,
-and their temporary password. They do not need Docker or a VPN — just the
-`realm` CLI and network access to port 3001.
+Hand the developer the server URL (`https://realm.example.com` with TLS, or
+`http://<this-host>:3001` without), their username, and their temporary
+password. They do not need Docker or a VPN — just the `realm` CLI and network
+access to the server.
 
 ---
 
-## 5. Firewall
+## 6. Firewall
+
+The correct rules depend on whether TLS is enabled.
+
+### With TLS (`REALM_DOMAIN` set)
+
+The installer (when ufw is active) configures this automatically:
+
+```bash
+# Caddy handles all inbound traffic; realm-server is localhost-only
+sudo ufw allow 80/tcp    # Let's Encrypt HTTP-01 challenge + HTTP→HTTPS redirect
+sudo ufw allow 443/tcp   # HTTPS / WSS (Caddy)
+sudo ufw deny  3001/tcp  # realm-server NOT public; Caddy reverse-proxies it
+```
+
+The installer also re-applies the docker-bridge → vault allows (`172.16.0.0/12` → 14321/14322).
+With ufw's default-deny INPUT policy, 5432/14321/14322 are already unreachable from the
+public; the explicit denies below are belt-and-suspenders the installer does **not** run —
+add them manually if you want them recorded:
+
+```bash
+sudo ufw deny 5432    # Postgres
+sudo ufw deny 14321   # Agent Vault HTTP API
+sudo ufw deny 14322   # Agent Vault proxy port
+```
+
+### Without TLS (plaintext, dev/internal only)
 
 ```bash
 # Allow developer access to the control plane
 sudo ufw allow 3001
 
-# Deny direct public access to internal services
+# Deny direct public access to internal services (manual; default-deny INPUT already blocks these)
 sudo ufw deny 5432    # Postgres
 sudo ufw deny 14321   # Agent Vault HTTP API
 sudo ufw deny 14322   # Agent Vault proxy port
@@ -184,7 +277,7 @@ sudo ufw status
 
 ---
 
-## 6. Operate
+## 7. Operate
 
 ### Service status and restart
 
@@ -215,11 +308,12 @@ leaves the database and `/etc/realm/env` intact.
 
 ---
 
-## 7. Known limitations (MVP)
+## 8. Known limitations (MVP)
 
-- **No TLS built in.** Token credentials travel in plaintext over HTTP. For
-  anything beyond a trusted private network, put a TLS-terminating reverse proxy
-  (nginx, Caddy) in front of port 3001.
+- **TLS requires a public domain.** The built-in Caddy TLS path (Section 3)
+  requires a DNS A record and public ports 80/443. For a private network without
+  a routable domain, the plaintext `:3001` path is the only option — restrict
+  access at the network/VPN layer.
 - **`vault_token` stored in plaintext.** The provider `vault_token` is stored
   unencrypted in the Postgres `providers` table. Do not store high-value
   long-lived credentials here until at-rest encryption lands in a future sprint.
