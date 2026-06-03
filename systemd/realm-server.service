@@ -6,9 +6,6 @@ Wants=docker.service network-online.target
 [Service]
 Type=simple
 User=realm
-# realm shells out to devpod, which writes config + ssh under $HOME; the realm
-# service user has no home, so point it at its data dir (created by install.sh).
-Environment=HOME=/var/lib/realm
 EnvironmentFile=/etc/realm/env
 ExecStart=/usr/bin/java -jar /opt/realm/realm-server.jar
 Restart=on-failure
