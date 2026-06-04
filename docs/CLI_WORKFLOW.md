@@ -51,20 +51,24 @@ Use the printed `ws_id` in the next steps.
 realm ssh demo-repo
 ```
 
-Your terminal is now relayed through the WebSocket proxy to a `devpod ssh`
-session running on the server. Run non-interactive commands or `claude`:
+For docker server-mode providers, `realm ssh` opens a **real interactive
+terminal** — the server allocates a PTY, your local terminal enters raw mode,
+and raw bytes are relayed in both directions. You get a proper shell prompt,
+full-screen programs work, and your terminal is restored on exit:
 
 ```bash
-# Inside the relay session:
-claude -p "summarise the open issues in this repo"
-claude -p "write tests for src/payments.ts"
+# Inside the session — it's a real terminal:
+$ vim src/payments.ts       # full-screen editor works
+$ claude -p "write tests for src/payments.ts"
+$ claude -p "summarise the open issues in this repo"
+$ exit                      # restores your local terminal
 ```
 
-When you are done, exit the session:
-
-```bash
-exit
-```
+> **Note for scripted / non-interactive use:** the PTY does terminal
+> negotiation, which can interfere with piping commands into `realm ssh`
+> non-interactively from your local shell. For automation, open the session
+> interactively and run `claude -p "…"` (or other commands) at the prompt
+> inside the session rather than piping them through the outer shell.
 
 ### Step 5 — Tear down
 
@@ -78,26 +82,19 @@ workspace `stopped`.
 
 ---
 
-## 2. Limitations today (stdio relay)
+## 2. Limitations today
 
-The `realm ssh` connection is a **stdio relay** — not a full PTY/TTY session.
-This means:
+- **`realm ssh` is a real interactive terminal for docker server-mode.**
+  Full-screen programs (`vim`, `htop`, `less`, etc.), arrow keys, and `Ctrl-C`
+  all work as expected.
 
-- **Works:** `claude -p "…"` (non-interactive, pipe-friendly), shell scripts,
-  `git`, `npm run`, `cat`, `grep`, and any other command that does not need a
-  real terminal.
-- **Does not work:** interactive TUI programs that use escape sequences — `vim`,
-  `nano`, arrow-key navigation in shells, `less` with interactive paging,
-  `htop`, etc.
-- **Input is line-buffered.** Each line you type is sent as a WebSocket frame
-  when you press Enter. There is no character-at-a-time mode.
+- **Non-docker server-mode providers** fall back to a stdio relay with no PTY.
+  Interactive TUI programs do not work in that case; `claude -p "…"` and other
+  non-interactive commands do.
+
 - **No dev-laptop port-forwarding.** Ports exposed inside the container
   (e.g. a local dev server on `:3000`) are not forwarded to your machine.
   This is deferred to a future sprint.
-
-If you need to run a command that requires a real TTY, restructure it as a
-non-interactive invocation. For example, instead of `claude` (interactive
-REPL), use `claude -p "your prompt here"`.
 
 ---
 

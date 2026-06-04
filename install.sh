@@ -26,7 +26,7 @@ case "$(uname -m)" in x86_64) GOARCH=amd64;; aarch64|arm64) GOARCH=arm64;; *) di
 log "installing apt dependencies"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl openjdk-21-jre-headless docker.io
+apt-get install -y -qq ca-certificates curl openjdk-21-jre-headless docker.io util-linux
 systemctl enable --now docker
 
 # 3. pinned binaries (VERIFY asset URLs against the real release pages during the spike)

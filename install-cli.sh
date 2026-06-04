@@ -32,8 +32,25 @@ exec bb --classpath "${CLI_HOME}/src" -m realm.core "\$@"
 EOF
 chmod +x "${BIN_DIR}/realm"
 
+# Ensure ~/.local/bin is on PATH: append to the user's shell rc(s) once (idempotent).
+# shellcheck disable=SC2016  # single quotes intentional: literal $HOME/$PATH written to rc
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
 case ":${PATH}:" in
-  *":${BIN_DIR}:"*) ;;
-  *) log "add to PATH: export PATH=\"${BIN_DIR}:\$PATH\"";;
+  *":${BIN_DIR}:"*) ;;   # already on PATH, nothing to do
+  *)
+    added=0
+    for rc in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+      # only touch an rc that exists; always ensure ~/.bashrc exists so bash users get it
+      if [ ! -e "$rc" ]; then
+        [ "$rc" = "${HOME}/.bashrc" ] || continue
+        : > "$rc"
+      fi
+      if ! grep -qF "$PATH_LINE" "$rc" 2>/dev/null; then
+        printf '\n# added by realm install-cli.sh\n%s\n' "$PATH_LINE" >> "$rc"
+        added=1
+      fi
+    done
+    [ "$added" = 1 ] && log "added ~/.local/bin to PATH in your shell rc — open a new shell or: source ~/.bashrc"
+    ;;
 esac
 log "installed. Next: realm login --server https://<server-host>:3001"

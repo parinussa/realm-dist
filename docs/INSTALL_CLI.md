@@ -30,19 +30,22 @@ your stored credentials.
 
 ## 2. Add `~/.local/bin` to PATH
 
-The installer writes `realm` to `~/.local/bin`. If that directory is not
-already on your PATH, add this line to your shell profile
-(`~/.zshrc`, `~/.bashrc`, etc.) and reload it:
+The installer writes `realm` to `~/.local/bin` and **automatically appends**
+the following line to `~/.bashrc` and `~/.zshrc` (idempotently — it will not
+add it twice):
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Reload your shell:
+To make `realm` available in your current shell without opening a new one,
+source your rc file:
 
 ```bash
 source ~/.zshrc   # or ~/.bashrc
 ```
+
+Future shell sessions will have `realm` on PATH automatically.
 
 Verify the install:
 

@@ -148,14 +148,26 @@ realm ssh <id>
 
 **Description**
 
-Opens a shell session inside the named workspace.
+Opens an interactive terminal session inside the named workspace.
 
-**Server mode (workspace has a `provision_state`):**
+**Server mode — docker provider:**
 Connects to the control plane's WebSocket proxy
-(`GET /v1/workspaces/:uuid/proxy`) and relays a `devpod ssh` stdio session
-running on the central VM. The relay is **stdio-only** — there is no PTY
-allocation. Non-interactive commands and `claude -p "…"` work correctly;
-interactive TUI programs (vim, arrow-key navigation, etc.) do not.
+(`GET /v1/workspaces/:uuid/proxy`). The server allocates a PTY via
+`docker exec` and relays raw bytes between your terminal and the container.
+Your local terminal is put in raw mode for the duration of the session and
+restored on exit. This means:
+
+- A proper shell prompt appears.
+- Full-screen TUI programs (`vim`, `htop`, `less`, etc.) work correctly.
+- Arrow keys, `Ctrl-C`, and other control sequences are passed through.
+- `claude -p "…"` and any other command work as expected.
+
+Exit the session with `exit` or `Ctrl-D`; your local terminal is restored
+automatically.
+
+**Server mode — non-docker providers:**
+Falls back to a stdio relay (no PTY). Non-interactive commands and
+`claude -p "…"` work; interactive TUI programs do not.
 
 **Client mode:**
 Calls `devpod ssh` directly on the local machine. Emits a `session-open`
@@ -170,8 +182,10 @@ None.
 
 ```bash
 realm ssh demo-repo
-# Inside the session:
-claude -p "explain the codebase"
+# You get a real shell prompt inside the container:
+$ vim src/main.py          # full-screen editor works
+$ claude -p "explain the codebase"
+$ exit
 ```
 
 ---
@@ -224,9 +238,17 @@ realm status
 
 **Description**
 
-Lists local DevPod workspaces and their provider. Uses Agent Vault credentials
-from the local config or environment (client-mode command — does not query the
-control plane).
+Lists workspaces and their current status.
+
+**Server mode:**
+Queries the control plane and lists all workspaces belonging to the
+authenticated user. Prints one workspace per line in the format
+`<ws_id>   <status>` (e.g. `active`, `idle`, `stopped`). No Agent Vault
+credentials are required.
+
+**Client / local mode:**
+Lists local DevPod workspaces and their provider. Reads configuration from
+`~/.realm/config.edn`; Agent Vault is not queried.
 
 **Flags**
 
@@ -235,6 +257,12 @@ None.
 **Example**
 
 ```bash
+# Server mode
+realm status
+# demo-repo                active
+# old-project              stopped
+
+# Client / local mode
 realm status
 # demo-repo                docker
 # other-project            docker
@@ -255,8 +283,14 @@ realm doctor
 Checks whether Agent Vault is configured and whether the `api.anthropic.com`
 service is present in the vault. If the service is missing, generates a
 proposal to create it and prints instructions to approve it in the Vault UI.
-This is a client-mode command — it reads vault config from the local
-environment.
+
+**Client / local mode:**
+Reads vault config from the local environment and performs the full check.
+
+**Server mode:**
+In server mode the vault is provided and managed by the control plane, not the
+local machine. `realm doctor` detects this, prints a short explanation, and
+exits 0. No error is reported.
 
 **Flags**
 
@@ -265,10 +299,16 @@ None.
 **Example**
 
 ```bash
+# Client / local mode
 realm doctor
 # realm doctor: checking Agent Vault...
 # ✓ anthropic service present (api.anthropic.com)
 # ✓ Vault reachable; Claude Code traffic will be credential-injected.
+
+# Server mode
+realm doctor
+# realm doctor: server mode detected — the vault is managed by the control
+# plane, not this machine. No local check needed.
 ```
 
 ---
