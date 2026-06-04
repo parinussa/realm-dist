@@ -151,6 +151,28 @@ agent-vault vault token --ttl 604800
 Copy the printed token — you will need it in the next step when creating a
 server-mode provider.
 
+**Step 5 — (optional) Rate limiting:**
+
+Agent Vault rate-limits proxied requests per instance and returns `429
+too_many_requests` (with a `Retry-After` header) when the limit trips — under heavy
+`claude` use a developer may hit this. It is **not configurable via the CLI**
+(`agent-vault owner config set` only exposes `--invite-only` / `--allowed-domains`);
+it is an **instance-owner setting in the web UI**: *Manage Instance → Settings → Rate
+Limiting*.
+
+The vault is bound to localhost + the docker bridge (never public), so reach the UI
+through an SSH tunnel from your workstation:
+
+```bash
+ssh -L 14321:localhost:14321 <server-host>
+# then open http://localhost:14321 and log in as the instance owner (the email/password
+# you set in Step 1), → Manage Instance → Settings → Rate Limiting → raise or disable it.
+```
+
+Leave the default for normal use; raise it only if legitimate traffic is being throttled.
+(If the 429 is Anthropic's *upstream* limit passed through the proxy, this setting won't
+help — that's the Anthropic API's own rate limit.)
+
 ---
 
 ## 5. Create a server-mode provider and assign a developer
